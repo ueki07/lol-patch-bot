@@ -2,12 +2,11 @@
 
 Moins complet que les notes officielles (pas de dégâts de sorts fiables) mais
 100 % robuste. Produit le même format de blocs que scraper.py :
-[{'name': str, 'lines': [str]}], chaque ligne = 'pastille+flèche attribut old→new'.
+[{'name': str, 'lines': [(kind, up, text)]}] où kind ∈ buff/nerf/neutral/text,
+up ∈ True/False/None. Le rendu (flèche colorée) est fait par notify.py.
 """
 
 from __future__ import annotations
-
-DOT = {"buff": "🟢", "nerf": "🔴", "neutral": "⚪"}
 
 # Stats de base d'un champion -> libellé FR. Toutes : hausse = buff.
 CHAMP_STATS = {
@@ -44,24 +43,19 @@ def _burn_sum(s):
     return total if seen else None
 
 
-def _line(kind: str, up: bool, text: str) -> str:
-    arrow = "🔺" if up else "🔻"
-    return f"{DOT[kind]}{arrow} {text}"
-
-
 def _real_champs(data: dict) -> dict:
     # Ignore les variantes de modes de jeu (clés type 'Jade_Ahri').
     return {k: v for k, v in data.items() if "_" not in k}
 
 
-def _champ_lines(o: dict, n: dict) -> list[str]:
-    lines: list[str] = []
+def _champ_lines(o: dict, n: dict) -> list[tuple]:
+    lines: list[tuple] = []
     o_stats, n_stats = o.get("stats", {}), n.get("stats", {})
     for stat, label in CHAMP_STATS.items():
         ov, nv = o_stats.get(stat), n_stats.get(stat)
         if ov is not None and nv is not None and ov != nv:
             up = nv > ov
-            lines.append(_line("buff" if up else "nerf", up, f"{label} {_fmt(ov)}→{_fmt(nv)}"))
+            lines.append(("buff" if up else "nerf", up, f"{label} {_fmt(ov)}→{_fmt(nv)}"))
 
     o_spells, n_spells = o.get("spells", []), n.get("spells", [])
     for i in range(min(len(o_spells), len(n_spells))):
@@ -70,12 +64,12 @@ def _champ_lines(o: dict, n: dict) -> list[str]:
             ov, nv = o_spells[i].get(field), n_spells[i].get(field)
             if ov is not None and nv is not None and ov != nv:
                 os_, ns_ = _burn_sum(ov), _burn_sum(nv)
+                text = f"{slot} {label} {ov}→{nv}"
                 if os_ is None or ns_ is None or os_ == ns_:
-                    lines.append(f"{DOT['neutral']} {slot} {label} {ov}→{nv}")
+                    lines.append(("neutral", None, text))
                 else:
                     up = ns_ > os_
-                    kind = "buff" if (up == up_is_buff) else "nerf"
-                    lines.append(_line(kind, up, f"{slot} {label} {ov}→{nv}"))
+                    lines.append(("buff" if (up == up_is_buff) else "nerf", up, text))
     return lines
 
 
@@ -87,9 +81,9 @@ def build_blocks(old_champ: dict, new_champ: dict, old_items: dict, new_items: d
     added = sorted(nc[k]["name"] for k in nck - ock)
     removed = sorted(oc[k]["name"] for k in ock - nck)
     if added:
-        blocks.append({"name": "🆕 Nouveaux champions", "lines": [", ".join(added)]})
+        blocks.append({"name": "🆕 Nouveaux champions", "lines": [("text", None, ", ".join(added))]})
     if removed:
-        blocks.append({"name": "❌ Champions retirés", "lines": [", ".join(removed)]})
+        blocks.append({"name": "❌ Champions retirés", "lines": [("text", None, ", ".join(removed))]})
 
     for key in sorted(ock & nck):
         lines = _champ_lines(oc[key], nc[key])
@@ -110,9 +104,9 @@ def build_blocks(old_champ: dict, new_champ: dict, old_items: dict, new_items: d
     it_added = sorted(ni[k]["name"] for k in nik - oik)
     it_removed = sorted(oi[k]["name"] for k in oik - nik)
     if it_added:
-        blocks.append({"name": "🆕 Nouveaux items", "lines": [", ".join(it_added)]})
+        blocks.append({"name": "🆕 Nouveaux items", "lines": [("text", None, ", ".join(it_added))]})
     if it_removed:
-        blocks.append({"name": "❌ Items retirés", "lines": [", ".join(it_removed)]})
+        blocks.append({"name": "❌ Items retirés", "lines": [("text", None, ", ".join(it_removed))]})
 
     price = []
     for key in oik & nik:
@@ -120,8 +114,8 @@ def build_blocks(old_champ: dict, new_champ: dict, old_items: dict, new_items: d
         nv = ni[key].get("gold", {}).get("total")
         if ov is not None and nv is not None and ov != nv:
             up = nv > ov
-            price.append(_line("nerf" if up else "buff", up, f"{ni[key]['name']} {ov}→{nv} po"))
+            price.append(("nerf" if up else "buff", up, f"{ni[key]['name']} {ov}→{nv} po"))
     if price:
-        blocks.append({"name": "💰 Prix des items", "lines": sorted(price)})
+        blocks.append({"name": "💰 Prix des items", "lines": sorted(price, key=lambda t: t[2])})
 
     return blocks

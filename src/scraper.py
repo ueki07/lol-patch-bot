@@ -22,8 +22,6 @@ UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # Attributs où *baisser* est un buff (cooldowns, coûts). Sinon monter = buff.
 LOWER_BETTER = ("coût", "récupération", "recharge", "délai")
 
-DOT = {"buff": "🟢", "nerf": "🔴", "neutral": "⚪"}
-
 
 def notes_url(version: str, year: int | None) -> str:
     """URL des notes FR. Le numéro marketing est basé sur l'année (26.xx en 2026),
@@ -54,15 +52,15 @@ def _num(s: str) -> float | None:
     return float(m.group().replace(",", ".")) if m else None
 
 
-def _classify(attr: str, old: str, new: str) -> tuple[str, str]:
-    """Renvoie (kind, arrow). kind ∈ buff/nerf/neutral, arrow ∈ 🔺/🔻/''."""
+def _classify(attr: str, old: str, new: str):
+    """Renvoie (kind, up). kind ∈ buff/nerf/neutral, up ∈ True/False/None."""
     o, n = _num(old), _num(new)
     scaling = "/" in old or "/" in new  # valeurs par rang -> sens ambigu
     if o is None or n is None or o == n or scaling:
-        return "neutral", ""
+        return "neutral", None
     lower_better = any(k in attr.lower() for k in LOWER_BETTER)
     kind = "buff" if ((n > o) != lower_better) else "nerf"
-    return kind, ("🔺" if n > o else "🔻")
+    return kind, (n > o)
 
 
 def _block_name(seg: str) -> str:
@@ -73,15 +71,15 @@ def _block_name(seg: str) -> str:
 
 
 def parse(html_text: str) -> list[dict]:
-    """Renvoie [{'name': str, 'lines': [str]}] — lignes prêtes à afficher.
+    """Renvoie [{'name': str, 'lines': [(kind, up, text)]}].
 
-    Chaque ligne est soit un sous-titre en gras (**Section**), soit un changement
-    'pastille+flèche attribut ancien→nouveau'.
+    kind ∈ buff/nerf/neutral/header ; up ∈ True/False/None. Le rendu (flèche
+    colorée, sous-titre) est fait par notify.py.
     """
     blocks: list[dict] = []
     for seg in re.split(r'class="change-title"', html_text)[1:]:
         name = _block_name(seg)
-        lines: list[str] = []
+        lines: list[tuple] = []
         section: str | None = None
         section_emitted = False
 
@@ -104,21 +102,21 @@ def parse(html_text: str) -> list[dict]:
                 else:
                     attr, old = left.strip(), ""
                 new = right.strip()
-                kind, arrow = _classify(attr, old, new)
+                kind, up = _classify(attr, old, new)
                 sep = "→" if old else ""
-                line = f"{DOT[kind]}{arrow} {attr} {old}{sep}{new}".strip()
+                line = (kind, up, f"{attr} {old}{sep}{new}".strip())
             else:
                 # Ligne sans valeur (bugfix, changement de texte) : neutre.
                 if section is None or len(txt) > 300:
                     continue
-                line = f"{DOT['neutral']} {txt}"
+                line = ("neutral", None, txt)
 
             if section and not section_emitted:
-                lines.append(f"**{section}**")
+                lines.append(("header", None, section))
                 section_emitted = True
             lines.append(line)
 
-        if any(not ln.startswith("**") for ln in lines):
+        if any(k != "header" for k, _, _ in lines):
             blocks.append({"name": name, "lines": lines})
 
     return blocks

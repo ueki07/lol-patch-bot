@@ -1,9 +1,10 @@
 """Envoi vers un webhook Discord (ou stdout si aucun webhook défini).
 
-Un seul moteur : send_blocks() reçoit des blocs [{'name', 'lines'}] (produits soit
-par le scraper, soit par le diff DDragon de repli) et les publie en un ou plusieurs
-messages, en respectant les limites Discord (1024 car/champ, 25 champs/embed,
-~6000 car/embed). Rendu compact : lignes en texte simple avec pastille + flèche.
+Un seul moteur : send_blocks() reçoit des blocs [{'name', 'lines'}] où chaque
+ligne est un tuple (kind, up, text). Rendu via un bloc de code ANSI : flèche ▲
+verte pour un buff, ▼ rouge pour un nerf (seule façon d'avoir une flèche colorée
+sur Discord). Pagination dans les limites Discord (1024 car/champ, 25 champs/embed,
+~6000 car/embed).
 """
 
 from __future__ import annotations
@@ -21,6 +22,23 @@ MAX_FIELDS = 25
 CHAR_BUDGET = 5500       # marge sous la limite de 6000 car/embed
 COLOR = 0x0AC8B9         # turquoise LoL
 UA = "lol-patch-bot/1.0 (+https://github.com/ueki07/lol-patch-bot)"
+
+# Codes ANSI rendus par Discord dans un bloc ```ansi.
+_GREEN, _RED, _BOLD, _RESET = "[1;32m", "[1;31m", "[1;37m", "[0m"
+FENCE_OPEN, FENCE_CLOSE = "```ansi\n", "\n```"
+
+
+def _render(kind: str, up, text: str) -> str:
+    """Ligne (kind, up, text) -> texte ANSI. Flèche ▲ verte (buff) / ▼ rouge (nerf)."""
+    if kind == "header":
+        return f"{_BOLD}{text}{_RESET}"
+    if kind == "text":
+        return text
+    if kind == "neutral":
+        return f"  {text}"
+    color = _GREEN if kind == "buff" else _RED
+    arrow = "▲" if up else "▼"
+    return f"{color}{arrow} {text}{_RESET}"
 
 
 def _post(payload: dict) -> None:
@@ -45,27 +63,38 @@ def _post(payload: dict) -> None:
     raise RuntimeError("Échec d'envoi Discord après plusieurs tentatives")
 
 
-def _chunk_lines(lines: list[str]) -> list[str]:
-    """Regroupe des lignes en blocs de texte <= MAX_FIELD_VALUE caractères."""
+def _chunk(rendered: list[str], budget: int, pre: str, post: str) -> list[str]:
+    """Regroupe des lignes rendues en blocs <= budget, entourés de pre/post."""
     blocks, cur, cur_len = [], [], 0
-    for ln in lines:
-        ln = ln[:MAX_FIELD_VALUE]
-        if cur and cur_len + len(ln) + 1 > MAX_FIELD_VALUE:
-            blocks.append("\n".join(cur))
+    for ln in rendered:
+        ln = ln[:budget]
+        if cur and cur_len + len(ln) + 1 > budget:
+            blocks.append(pre + "\n".join(cur) + post)
             cur, cur_len = [], 0
         cur.append(ln)
         cur_len += len(ln) + 1
     if cur:
-        blocks.append("\n".join(cur))
+        blocks.append(pre + "\n".join(cur) + post)
     return blocks
+
+
+def _block_values(block: dict) -> list[str]:
+    """Valeurs de champ pour un bloc. Listes simples -> texte brut ; changements
+    -> bloc ANSI (flèches colorées)."""
+    lines = block["lines"]
+    if all(kind == "text" for kind, _, _ in lines):
+        return _chunk([t for _, _, t in lines], MAX_FIELD_VALUE, "", "")
+    rendered = [_render(kind, up, t) for kind, up, t in lines]
+    inner = MAX_FIELD_VALUE - len(FENCE_OPEN) - len(FENCE_CLOSE)
+    return _chunk(rendered, inner, FENCE_OPEN, FENCE_CLOSE)
 
 
 def _fields(blocks: list[dict], inline: bool) -> list[dict]:
     fields = []
     for block in blocks:
-        # Les listes (nouveaux champions/items) restent pleine largeur.
+        # Listes (nouveaux champions/items) et blocs ANSI : pleine largeur.
         is_list = block["name"].startswith(("🆕", "❌"))
-        for i, chunk in enumerate(_chunk_lines(block["lines"])):
+        for i, chunk in enumerate(_block_values(block)):
             name = block["name"] if i == 0 else f"{block['name']} (suite)"
             fields.append({"name": name[:256], "value": chunk,
                            "inline": inline and not is_list})
