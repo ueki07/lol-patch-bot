@@ -1,13 +1,20 @@
 """Diff des données de deux versions DDragon pour générer un changelog détaillé.
 
 On compare des valeurs numériques fiables (stats de base, cooldowns, coûts,
-portées, prix des items). On évite volontairement de diff les tooltips en texte
-brut : ils contiennent des variables et génèrent trop de faux positifs.
+portées, valeurs d'effets de sorts, prix des items). On évite volontairement de
+diff les tooltips en texte brut : ils contiennent des variables et génèrent trop
+de faux positifs.
+
+Chaque changement est classé en 'buff' / 'nerf' / 'neutral' pour le rendu en
+couleur (vert / rouge / gris). Un buff n'est pas "la valeur monte" : baisser un
+cooldown ou un coût est un buff. Certains changements (effets de sorts) n'ont pas
+de sens directionnel connu -> 'neutral'.
 """
 
 from __future__ import annotations
 
-# Stats de base d'un champion -> libellé FR lisible.
+# Stats de base d'un champion -> (libellé FR, "une hausse est-elle un buff ?").
+# Toutes les stats de base : plus c'est haut, mieux c'est.
 CHAMP_STATS = {
     "hp": "PV",
     "hpperlevel": "PV/niv",
@@ -30,18 +37,42 @@ CHAMP_STATS = {
     "attackspeed": "Vit. att.",
 }
 
-# Champs "burn" des sorts : chaînes façon "8/7/6/5/4" faciles à comparer.
+# Champs "burn" scalaires des sorts -> (libellé, "hausse = buff ?").
+# CD et coût : baisser = buff. Portée : monter = buff.
 SPELL_FIELDS = {
-    "cooldownBurn": "CD",
-    "costBurn": "Coût",
-    "rangeBurn": "Portée",
+    "cooldownBurn": ("CD", False),
+    "costBurn": ("Coût", False),
+    "rangeBurn": ("Portée", True),
 }
+
+SLOTS = ["Q", "W", "E", "R"]
 
 
 def _fmt(v) -> str:
     if isinstance(v, float):
         return f"{v:.4g}"
     return str(v)
+
+
+def _burn_sum(s) -> float | None:
+    """Somme numérique d'une chaîne 'burn' type '8/7/6/5/4'. None si non numérique."""
+    total, seen = 0.0, False
+    for part in str(s).split("/"):
+        try:
+            total += float(part.strip())
+            seen = True
+        except ValueError:
+            pass
+    return total if seen else None
+
+
+def _kind(old_val, new_val, up_is_buff: bool) -> str:
+    """Classe un changement numérique en buff / nerf / neutral."""
+    o, n = _burn_sum(old_val), _burn_sum(new_val)
+    if o is None or n is None or o == n:
+        return "neutral"
+    higher = n > o
+    return "buff" if higher == up_is_buff else "nerf"
 
 
 def _real_champs(data: dict) -> dict:
@@ -53,36 +84,40 @@ def _real_champs(data: dict) -> dict:
 
 
 def diff_champions(old: dict, new: dict) -> dict:
-    """Renvoie {'added': [...], 'removed': [...], 'changed': {champ: [lignes]}}."""
+    """Renvoie {'added': [...], 'removed': [...], 'changed': {champ: [(kind, texte)]}}."""
     old, new = _real_champs(old), _real_champs(new)
     old_keys, new_keys = set(old), set(new)
     added = sorted(new[k]["name"] for k in new_keys - old_keys)
     removed = sorted(old[k]["name"] for k in old_keys - new_keys)
-    changed: dict[str, list[str]] = {}
+    changed: dict[str, list[tuple[str, str]]] = {}
 
     for key in sorted(old_keys & new_keys):
         o, n = old[key], new[key]
-        lines: list[str] = []
+        lines: list[tuple[str, str]] = []
 
-        # Stats de base
+        # Stats de base (hausse = buff).
         o_stats, n_stats = o.get("stats", {}), n.get("stats", {})
         for stat, label in CHAMP_STATS.items():
             ov, nv = o_stats.get(stat), n_stats.get(stat)
             if ov is not None and nv is not None and ov != nv:
-                arrow = "🔺" if nv > ov else "🔻"
-                lines.append(f"{arrow} {label} : {_fmt(ov)} → {_fmt(nv)}")
+                kind = "buff" if nv > ov else "nerf"
+                lines.append((kind, f"{label} {_fmt(ov)}→{_fmt(nv)}"))
 
-        # Sorts (Passif inclus via 'passive' n'a pas de burn, on prend spells[])
-        o_spells = o.get("spells", [])
-        n_spells = n.get("spells", [])
-        slots = ["Q", "W", "E", "R"]
+        # Sorts : CD / coût / portée + valeurs d'effets (effectBurn).
+        o_spells, n_spells = o.get("spells", []), n.get("spells", [])
         for i in range(min(len(o_spells), len(n_spells))):
             os_, ns_ = o_spells[i], n_spells[i]
-            slot = slots[i] if i < len(slots) else f"S{i}"
-            for field, label in SPELL_FIELDS.items():
+            slot = SLOTS[i] if i < len(SLOTS) else f"S{i}"
+
+            for field, (label, up_is_buff) in SPELL_FIELDS.items():
                 ov, nv = os_.get(field), ns_.get(field)
                 if ov is not None and nv is not None and ov != nv:
-                    lines.append(f"• {slot} {label} : {ov} → {nv}")
+                    lines.append((_kind(ov, nv, up_is_buff), f"{slot} {label} {ov}→{nv}"))
+
+            # NB : on ne diff PAS effectBurn (dégâts/soins des sorts). Riot y migre
+            # régulièrement des valeurs vers d'autres champs, ce qui produit de faux
+            # « →0 » massifs. Ces changements-là restent couverts par les notes
+            # officielles (lien dans l'embed).
 
         if lines:
             changed[n["name"]] = lines
@@ -91,7 +126,7 @@ def diff_champions(old: dict, new: dict) -> dict:
 
 
 def diff_items(old: dict, new: dict) -> dict:
-    """Diff des items : ajouts/retraits et changements de prix total."""
+    """Diff des items : ajouts/retraits et changements de prix total (baisse = buff)."""
     def buyable(d):
         # Uniquement les items achetables, sur la Faille de l'invocateur (map 11).
         return {
@@ -105,13 +140,14 @@ def diff_items(old: dict, new: dict) -> dict:
     old_keys, new_keys = set(old), set(new)
     added = sorted(new[k]["name"] for k in new_keys - old_keys)
     removed = sorted(old[k]["name"] for k in old_keys - new_keys)
-    price: list[str] = []
+    price: list[tuple[str, str]] = []
 
     for key in old_keys & new_keys:
         ov = old[key].get("gold", {}).get("total")
         nv = new[key].get("gold", {}).get("total")
         if ov is not None and nv is not None and ov != nv:
-            arrow = "🔺" if nv > ov else "🔻"
-            price.append(f"{arrow} {new[key]['name']} : {ov} → {nv} po")
+            kind = "buff" if nv < ov else "nerf"  # moins cher = buff
+            price.append((kind, f"{new[key]['name']} {ov}→{nv} po"))
 
-    return {"added": added, "removed": removed, "price": sorted(price)}
+    price.sort(key=lambda t: t[1])
+    return {"added": added, "removed": removed, "price": price}

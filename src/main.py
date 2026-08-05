@@ -68,8 +68,9 @@ def main() -> None:
         ddragon.champions_full(prev), ddragon.champions_full(latest)
     )
     item_diff = diff.diff_items(ddragon.items(prev), ddragon.items(latest))
+    date = ddragon.patch_date(latest)
 
-    notify.send_patch(latest, prev, champ_diff, item_diff)
+    notify.send_patch(latest, prev, champ_diff, item_diff, date=date)
     save_state(latest)
     print("Notification envoyée et state mis à jour.")
 

@@ -1,4 +1,9 @@
-"""Envoi des embeds vers un webhook Discord (ou stdout si aucun webhook défini)."""
+"""Envoi des embeds vers un webhook Discord (ou stdout si aucun webhook défini).
+
+Les changements buff / nerf / neutral sont rendus dans des blocs de code ```diff```
+que Discord colore : les lignes en '+' apparaissent en vert (buff), en '-' en
+rouge (nerf), et sans préfixe en gris (neutre, ex: valeurs d'effets de sorts).
+"""
 
 from __future__ import annotations
 
@@ -12,8 +17,11 @@ WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 MAX_EMBEDS_PER_MSG = 10
 MAX_FIELDS_PER_EMBED = 25
 MAX_FIELD_VALUE = 1024
-MAX_DESC = 4096
 COLOR = 0x0AC8B9  # turquoise LoL
+
+DIFF_OPEN = "```diff\n"
+DIFF_CLOSE = "\n```"
+PREFIX = {"buff": "+ ", "nerf": "- ", "neutral": "  "}
 
 
 def _post(payload: dict) -> None:
@@ -36,60 +44,65 @@ def _post(payload: dict) -> None:
             raise RuntimeError(f"Discord a répondu {resp.status}")
 
 
-def _chunk_field_value(lines: list[str]) -> list[str]:
-    """Découpe une liste de lignes en blocs <= MAX_FIELD_VALUE caractères."""
-    blocks, cur = [], ""
-    for ln in lines:
-        if len(cur) + len(ln) + 1 > MAX_FIELD_VALUE:
-            blocks.append(cur.rstrip())
-            cur = ""
-        cur += ln + "\n"
-    if cur.strip():
-        blocks.append(cur.rstrip())
+def _diff_blocks(entries: list[tuple[str, str]]) -> list[str]:
+    """Transforme des (kind, texte) en un ou plusieurs blocs ```diff``` <= 1024 car."""
+    budget = MAX_FIELD_VALUE - len(DIFF_OPEN) - len(DIFF_CLOSE)
+    blocks, cur, cur_len = [], [], 0
+    for kind, text in entries:
+        line = PREFIX.get(kind, "  ") + text
+        if cur and cur_len + len(line) + 1 > budget:
+            blocks.append(DIFF_OPEN + "\n".join(cur) + DIFF_CLOSE)
+            cur, cur_len = [], 0
+        cur.append(line)
+        cur_len += len(line) + 1
+    if cur:
+        blocks.append(DIFF_OPEN + "\n".join(cur) + DIFF_CLOSE)
     return blocks
+
+
+def _list_field(name: str, names: list[str]) -> dict:
+    return {"name": name, "value": ", ".join(names)[:MAX_FIELD_VALUE], "inline": False}
 
 
 def build_fields(champ_diff: dict, item_diff: dict) -> list[dict]:
     fields: list[dict] = []
 
     if champ_diff["added"]:
-        fields.append({"name": "🆕 Nouveaux champions",
-                       "value": ", ".join(champ_diff["added"])[:MAX_FIELD_VALUE],
-                       "inline": False})
+        fields.append(_list_field("🆕 Nouveaux champions", champ_diff["added"]))
     if champ_diff["removed"]:
-        fields.append({"name": "❌ Champions retirés",
-                       "value": ", ".join(champ_diff["removed"])[:MAX_FIELD_VALUE],
-                       "inline": False})
+        fields.append(_list_field("❌ Champions retirés", champ_diff["removed"]))
 
-    for champ, lines in champ_diff["changed"].items():
-        for i, block in enumerate(_chunk_field_value(lines)):
+    for champ, entries in champ_diff["changed"].items():
+        for i, block in enumerate(_diff_blocks(entries)):
             name = champ if i == 0 else f"{champ} (suite)"
             fields.append({"name": name, "value": block, "inline": True})
 
     if item_diff["added"]:
-        fields.append({"name": "🆕 Nouveaux items",
-                       "value": ", ".join(item_diff["added"])[:MAX_FIELD_VALUE],
-                       "inline": False})
+        fields.append(_list_field("🆕 Nouveaux items", item_diff["added"]))
     if item_diff["removed"]:
-        fields.append({"name": "❌ Items retirés",
-                       "value": ", ".join(item_diff["removed"])[:MAX_FIELD_VALUE],
-                       "inline": False})
-    for block in _chunk_field_value(item_diff["price"]):
+        fields.append(_list_field("❌ Items retirés", item_diff["removed"]))
+    for block in _diff_blocks(item_diff["price"]):
         fields.append({"name": "💰 Prix des items", "value": block, "inline": False})
 
     return fields
 
 
-def send_patch(version: str, prev: str, champ_diff: dict, item_diff: dict) -> None:
+def send_patch(version: str, prev: str, champ_diff: dict, item_diff: dict,
+               date: str | None = None) -> None:
     fields = build_fields(champ_diff, item_diff)
+    desc = ""
+    if date:
+        desc += f"📅 Sortie le **{date}**\n"
+    desc += (
+        f"Changements détectés par rapport à **{prev}**.\n"
+        f"[📖 Notes officielles]({_notes_url(version)})\n"
+        f"🟢 buff  🔴 nerf  ⚪ ajustement"
+    )
     header = {
         "title": f"🩹 Patch {version} est arrivé !",
         "url": _notes_url(version),
         "color": COLOR,
-        "description": (
-            f"Changements détectés par rapport à **{prev}**.\n"
-            f"[📖 Notes officielles]({_notes_url(version)})"
-        ),
+        "description": desc,
     }
 
     if not fields:
@@ -97,7 +110,7 @@ def send_patch(version: str, prev: str, champ_diff: dict, item_diff: dict) -> No
         _post({"embeds": [header]})
         return
 
-    # On répartit les fields sur plusieurs embeds (max 25 fields/embed).
+    # Répartition des fields sur plusieurs embeds (max 25 fields/embed).
     embeds = [header]
     for i in range(0, len(fields), MAX_FIELDS_PER_EMBED):
         chunk = fields[i:i + MAX_FIELDS_PER_EMBED]
@@ -106,7 +119,7 @@ def send_patch(version: str, prev: str, champ_diff: dict, item_diff: dict) -> No
         else:
             embeds.append({"color": COLOR, "fields": chunk})
 
-    # Puis on découpe en messages de max 10 embeds.
+    # Puis découpage en messages de max 10 embeds.
     for i in range(0, len(embeds), MAX_EMBEDS_PER_MSG):
         _post({"embeds": embeds[i:i + MAX_EMBEDS_PER_MSG]})
 

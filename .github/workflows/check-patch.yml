@@ -2,7 +2,7 @@ name: Check LoL patch
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # toutes les 15 min
+    - cron: "*/30 * * * *"   # toutes les 30 min (~1440 min/mois, sous le quota gratuit privé)
   workflow_dispatch:          # bouton "Run workflow" manuel
     inputs:
       force:
