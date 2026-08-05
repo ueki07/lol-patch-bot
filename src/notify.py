@@ -23,7 +23,13 @@ def _post(payload: dict) -> None:
         return
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        WEBHOOK, data=data, headers={"Content-Type": "application/json"}
+        WEBHOOK,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            # Discord (via Cloudflare) rejette le User-Agent par défaut de Python.
+            "User-Agent": "lol-patch-bot/1.0 (+https://github.com/ueki07/lol-patch-bot)",
+        },
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         if resp.status >= 300:
