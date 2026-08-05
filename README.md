@@ -4,21 +4,27 @@ Poste automatiquement un changelog détaillé dans un salon Discord dès qu'un
 nouveau patch de League of Legends sort.
 
 - **Détection** : API officielle Data Dragon de Riot (`versions.json`), gratuite, sans clé.
-- **Contenu** : diff des données parsées entre l'ancienne et la nouvelle version
-  (stats de base des champions, cooldowns/coûts/portées des sorts, nouveaux/retirés
-  champions & items, changements de prix), en **français**.
-- **Envoi** : webhook Discord (aucun serveur à héberger).
-- **Cron** : GitHub Actions, toutes les 15 min — 100 % gratuit.
+- **Contenu** : **scraping des notes officielles FR** — changelog complet (champions,
+  sorts détaillés, items, runes, ARAM, jungle…), avec buff 🟢 / nerf 🔴 / ajustement ⚪
+  déduits des valeurs. Repli automatique sur un diff des données DDragon si le
+  scraping échoue.
+- **Envoi** : webhook Discord (aucun serveur à héberger), paginé en plusieurs messages.
+- **Cron** : GitHub Actions, ciblé sur les jours de patch (mar/mer/jeu) — 100 % gratuit.
 
 ## Fonctionnement
 
 ```
-GitHub Actions (cron 15 min)
+GitHub Actions (cron ciblé mar/mer/jeu)
    └─ src/main.py
-        ├─ DDragon versions.json  → nouvelle version ?
-        ├─ diff champions + items (vs version précédente)
-        └─ webhook Discord (embed FR)  +  maj data/state.json (commit)
+        ├─ ddragon.py : versions.json → nouvelle version ? + date (Last-Modified)
+        ├─ scraper.py : notes officielles FR → changelog complet   ┐
+        ├─ diff.py    : diff données DDragon (repli si scraping KO) ┘
+        └─ notify.py  : webhook Discord (embeds paginés) + maj data/state.json (commit)
 ```
+
+Numéro de patch : DDragon expose `16.xx.y` mais les notes officielles utilisent
+le numéro marketing `26.xx` (basé sur l'année). On dérive ce dernier depuis
+l'année de la date du patch.
 
 `data/state.json` mémorise la dernière version notifiée. Au premier lancement, le
 bot enregistre la version courante **sans** notifier (pour ne pas spammer un patch

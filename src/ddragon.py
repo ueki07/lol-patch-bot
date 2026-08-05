@@ -48,11 +48,11 @@ def items(version: str) -> dict:
     return _get_json(url)["data"]
 
 
-def patch_date(version: str) -> str | None:
-    """Date effective du patch, en français (ex: '28 juillet 2026').
+def patch_datetime(version: str):
+    """Date/heure de mise en ligne de la version (= jour du patch), ou None.
 
     DDragon ne fournit pas de date : on lit l'en-tête HTTP Last-Modified des
-    données de la version, qui correspond à leur mise en ligne = jour du patch.
+    données de la version.
     """
     url = f"{BASE}/cdn/{version}/data/{LOCALE}/championFull.json"
     req = urllib.request.Request(url, headers={"User-Agent": UA}, method="HEAD")
@@ -63,5 +63,9 @@ def patch_date(version: str) -> str | None:
         return None
     if not last_modified:
         return None
-    dt = email.utils.parsedate_to_datetime(last_modified)
+    return email.utils.parsedate_to_datetime(last_modified)
+
+
+def format_date_fr(dt) -> str:
+    """Ex: '28 juillet 2026'."""
     return f"{dt.day} {MOIS_FR[dt.month - 1]} {dt.year}"

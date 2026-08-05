@@ -1,130 +1,108 @@
-"""Envoi des embeds vers un webhook Discord (ou stdout si aucun webhook défini).
+"""Envoi vers un webhook Discord (ou stdout si aucun webhook défini).
 
-Les changements buff / nerf / neutral sont rendus dans des blocs de code ```diff```
-que Discord colore : les lignes en '+' apparaissent en vert (buff), en '-' en
-rouge (nerf), et sans préfixe en gris (neutre, ex: valeurs d'effets de sorts).
+Un seul moteur : send_blocks() reçoit des blocs [{'name', 'lines'}] (produits soit
+par le scraper, soit par le diff DDragon de repli) et les publie en un ou plusieurs
+messages, en respectant les limites Discord (1024 car/champ, 25 champs/embed,
+~6000 car/embed). Rendu compact : lignes en texte simple avec pastille + flèche.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
+import urllib.error
 import urllib.request
 
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
-# Limites Discord
-MAX_EMBEDS_PER_MSG = 10
-MAX_FIELDS_PER_EMBED = 25
 MAX_FIELD_VALUE = 1024
-COLOR = 0x0AC8B9  # turquoise LoL
-
-DIFF_OPEN = "```diff\n"
-DIFF_CLOSE = "\n```"
-PREFIX = {"buff": "+ ", "nerf": "- ", "neutral": "  "}
+MAX_FIELDS = 25
+CHAR_BUDGET = 5500       # marge sous la limite de 6000 car/embed
+COLOR = 0x0AC8B9         # turquoise LoL
+UA = "lol-patch-bot/1.0 (+https://github.com/ueki07/lol-patch-bot)"
 
 
 def _post(payload: dict) -> None:
     if not WEBHOOK:
-        print("[DRY-RUN] Pas de DISCORD_WEBHOOK_URL — payload :")
-        print(json.dumps(payload, ensure_ascii=False, indent=2)[:4000])
+        print("[DRY-RUN] " + json.dumps(payload, ensure_ascii=False)[:1500])
         return
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        WEBHOOK,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            # Discord (via Cloudflare) rejette le User-Agent par défaut de Python.
-            "User-Agent": "lol-patch-bot/1.0 (+https://github.com/ueki07/lol-patch-bot)",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        if resp.status >= 300:
-            raise RuntimeError(f"Discord a répondu {resp.status}")
+    for attempt in range(4):
+        req = urllib.request.Request(
+            WEBHOOK, data=data,
+            headers={"Content-Type": "application/json", "User-Agent": UA},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30):
+                return
+        except urllib.error.HTTPError as e:
+            if e.code == 429:  # rate limit : on respecte Retry-After
+                retry = float(e.headers.get("Retry-After", "1"))
+                time.sleep(min(retry + 0.3, 5))
+                continue
+            raise
+    raise RuntimeError("Échec d'envoi Discord après plusieurs tentatives")
 
 
-def _diff_blocks(entries: list[tuple[str, str]]) -> list[str]:
-    """Transforme des (kind, texte) en un ou plusieurs blocs ```diff``` <= 1024 car."""
-    budget = MAX_FIELD_VALUE - len(DIFF_OPEN) - len(DIFF_CLOSE)
+def _chunk_lines(lines: list[str]) -> list[str]:
+    """Regroupe des lignes en blocs de texte <= MAX_FIELD_VALUE caractères."""
     blocks, cur, cur_len = [], [], 0
-    for kind, text in entries:
-        line = PREFIX.get(kind, "  ") + text
-        if cur and cur_len + len(line) + 1 > budget:
-            blocks.append(DIFF_OPEN + "\n".join(cur) + DIFF_CLOSE)
+    for ln in lines:
+        ln = ln[:MAX_FIELD_VALUE]
+        if cur and cur_len + len(ln) + 1 > MAX_FIELD_VALUE:
+            blocks.append("\n".join(cur))
             cur, cur_len = [], 0
-        cur.append(line)
-        cur_len += len(line) + 1
+        cur.append(ln)
+        cur_len += len(ln) + 1
     if cur:
-        blocks.append(DIFF_OPEN + "\n".join(cur) + DIFF_CLOSE)
+        blocks.append("\n".join(cur))
     return blocks
 
 
-def _list_field(name: str, names: list[str]) -> dict:
-    return {"name": name, "value": ", ".join(names)[:MAX_FIELD_VALUE], "inline": False}
-
-
-def build_fields(champ_diff: dict, item_diff: dict) -> list[dict]:
-    fields: list[dict] = []
-
-    if champ_diff["added"]:
-        fields.append(_list_field("🆕 Nouveaux champions", champ_diff["added"]))
-    if champ_diff["removed"]:
-        fields.append(_list_field("❌ Champions retirés", champ_diff["removed"]))
-
-    for champ, entries in champ_diff["changed"].items():
-        for i, block in enumerate(_diff_blocks(entries)):
-            name = champ if i == 0 else f"{champ} (suite)"
-            fields.append({"name": name, "value": block, "inline": True})
-
-    if item_diff["added"]:
-        fields.append(_list_field("🆕 Nouveaux items", item_diff["added"]))
-    if item_diff["removed"]:
-        fields.append(_list_field("❌ Items retirés", item_diff["removed"]))
-    for block in _diff_blocks(item_diff["price"]):
-        fields.append({"name": "💰 Prix des items", "value": block, "inline": False})
-
+def _fields(blocks: list[dict]) -> list[dict]:
+    fields = []
+    for block in blocks:
+        for i, chunk in enumerate(_chunk_lines(block["lines"])):
+            name = block["name"] if i == 0 else f"{block['name']} (suite)"
+            fields.append({"name": name[:256], "value": chunk, "inline": False})
     return fields
 
 
-def send_patch(version: str, prev: str, champ_diff: dict, item_diff: dict,
-               date: str | None = None) -> None:
-    fields = build_fields(champ_diff, item_diff)
+def send_blocks(patch: str, date: str | None, url: str, blocks: list[dict],
+                source: str) -> int:
+    """Publie les blocs. Renvoie le nombre de messages envoyés."""
     desc = ""
     if date:
         desc += f"📅 Sortie le **{date}**\n"
-    desc += (
-        f"Changements détectés par rapport à **{prev}**.\n"
-        f"[📖 Notes officielles]({_notes_url(version)})\n"
-        f"🟢 buff  🔴 nerf  ⚪ ajustement"
-    )
-    header = {
-        "title": f"🩹 Patch {version} est arrivé !",
-        "url": _notes_url(version),
-        "color": COLOR,
-        "description": desc,
-    }
+    desc += f"[📖 Notes officielles]({url})\n🟢 buff  🔴 nerf  ⚪ ajustement"
+    if source == "fallback":
+        desc += "\n_(données de base — notes détaillées indisponibles)_"
+    title = f"🩹 Patch {patch} est arrivé !"
 
+    fields = _fields(blocks)
     if not fields:
-        header["description"] += "\n\n*Aucun changement de data détecté (patch mineur/hotfix).*"
-        _post({"embeds": [header]})
-        return
+        _post({"embeds": [{"title": title, "url": url, "color": COLOR,
+                           "description": desc + "\n\n*Aucun changement détecté.*"}]})
+        return 1
 
-    # Répartition des fields sur plusieurs embeds (max 25 fields/embed).
-    embeds = [header]
-    for i in range(0, len(fields), MAX_FIELDS_PER_EMBED):
-        chunk = fields[i:i + MAX_FIELDS_PER_EMBED]
-        if i == 0:
-            header["fields"] = chunk
-        else:
-            embeds.append({"color": COLOR, "fields": chunk})
-
-    # Puis découpage en messages de max 10 embeds.
-    for i in range(0, len(embeds), MAX_EMBEDS_PER_MSG):
-        _post({"embeds": embeds[i:i + MAX_EMBEDS_PER_MSG]})
-
-
-def _notes_url(version: str) -> str:
-    # 15.15.1 -> 15-15 ; l'URL officielle FR suit ce format.
-    major_minor = "-".join(version.split(".")[:2])
-    return f"https://www.leagueoflegends.com/fr-fr/news/game-updates/patch-{major_minor}-notes/"
+    # Un embed par message : on remplit jusqu'à 25 champs ou ~5500 caractères.
+    sent, i, first = 0, 0, True
+    while i < len(fields):
+        embed = {"color": COLOR}
+        used = 0
+        if first:
+            embed.update(title=title, url=url, description=desc)
+            used = len(title) + len(desc)
+        chunk = []
+        while i < len(fields) and len(chunk) < MAX_FIELDS:
+            cost = len(fields[i]["name"]) + len(fields[i]["value"])
+            if chunk and used + cost > CHAR_BUDGET:
+                break
+            chunk.append(fields[i]); used += cost; i += 1
+        embed["fields"] = chunk
+        _post({"embeds": [embed]})
+        sent += 1; first = False
+        if i < len(fields):
+            time.sleep(0.7)  # évite le rate limit du webhook
+    return sent

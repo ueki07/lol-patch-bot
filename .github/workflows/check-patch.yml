@@ -2,7 +2,11 @@ name: Check LoL patch
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # toutes les 30 min (~1440 min/mois, sous le quota gratuit privé)
+    # Fenêtre patch (mar/mer/jeu UTC) : détection à 15 min près le jour J.
+    - cron: "*/15 * * * 2,3,4"
+    # Reste de la semaine : filet de sécurité léger pour les hotfixes.
+    - cron: "0 */8 * * 0,1,5,6"
+    # ~1300 min/mois au total, sous le quota gratuit (2000 min) d'un repo privé.
   workflow_dispatch:          # bouton "Run workflow" manuel
     inputs:
       force:
