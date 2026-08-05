@@ -4,12 +4,13 @@ Poste automatiquement un changelog détaillé dans un salon Discord dès qu'un
 nouveau patch de League of Legends sort.
 
 - **Détection** : API officielle Data Dragon de Riot (`versions.json`), gratuite, sans clé.
-- **Contenu** : **scraping des notes officielles FR** — changelog complet (champions,
-  sorts détaillés, items, runes, ARAM, jungle…), avec buff 🟢 / nerf 🔴 / ajustement ⚪
-  déduits des valeurs. Repli automatique sur un diff des données DDragon si le
-  scraping échoue.
-- **Envoi** : webhook Discord (aucun serveur à héberger), paginé en plusieurs messages.
-- **Cron** : GitHub Actions, ciblé sur les jours de patch (mar/mer/jeu) — 100 % gratuit.
+- **Contenu (défaut)** : résumé **concis et lisible** via les données DDragon —
+  l'essentiel en un coup d'œil : stats de base, CD/coût/portée des sorts,
+  nouveaux/retirés champions & items, prix. Buff 🟢 / nerf 🔴 / ajustement ⚪.
+- **Mode `--detailed`** (ou `DETAILED=1`) : changelog **complet** scrapé depuis les
+  notes officielles FR (tous les sorts, items, runes, ARAM…), paginé en plusieurs messages.
+- **Envoi** : webhook Discord (aucun serveur à héberger).
+- **Cron** : GitHub Actions toutes les 15 min — gratuit (repo public = minutes illimitées).
 
 ## Fonctionnement
 

@@ -60,27 +60,28 @@ def _chunk_lines(lines: list[str]) -> list[str]:
     return blocks
 
 
-def _fields(blocks: list[dict]) -> list[dict]:
+def _fields(blocks: list[dict], inline: bool) -> list[dict]:
     fields = []
     for block in blocks:
+        # Les listes (nouveaux champions/items) restent pleine largeur.
+        is_list = block["name"].startswith(("🆕", "❌"))
         for i, chunk in enumerate(_chunk_lines(block["lines"])):
             name = block["name"] if i == 0 else f"{block['name']} (suite)"
-            fields.append({"name": name[:256], "value": chunk, "inline": False})
+            fields.append({"name": name[:256], "value": chunk,
+                           "inline": inline and not is_list})
     return fields
 
 
 def send_blocks(patch: str, date: str | None, url: str, blocks: list[dict],
-                source: str) -> int:
+                source: str, inline: bool = True) -> int:
     """Publie les blocs. Renvoie le nombre de messages envoyés."""
     desc = ""
     if date:
         desc += f"📅 Sortie le **{date}**\n"
-    desc += f"[📖 Notes officielles]({url})\n🟢 buff  🔴 nerf  ⚪ ajustement"
-    if source == "fallback":
-        desc += "\n_(données de base — notes détaillées indisponibles)_"
+    desc += f"[📖 Notes complètes]({url})\n🟢 buff  🔴 nerf  ⚪ ajustement"
     title = f"🩹 Patch {patch} est arrivé !"
 
-    fields = _fields(blocks)
+    fields = _fields(blocks, inline)
     if not fields:
         _post({"embeds": [{"title": title, "url": url, "color": COLOR,
                            "description": desc + "\n\n*Aucun changement détecté.*"}]})

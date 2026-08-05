@@ -65,26 +65,30 @@ def main() -> None:
     patch = f"{major}.{minor}"
     url = scraper.notes_url(latest, year)
 
-    # Principal : scraping des notes officielles (changelog complet).
-    blocks, source = None, "scrape"
-    try:
-        blocks = scraper.parse(scraper.fetch(url))
-        print(f"Scraping OK : {len(blocks)} blocs depuis {url}")
-    except Exception as e:  # noqa: BLE001
-        print(f"Scraping échoué ({e}). Repli sur le diff DDragon.")
+    # Mode par défaut : résumé DDragon concis (stats de base + CD/coût/portée des
+    # sorts + nouveaux/retirés + prix des items) — l'essentiel, lisible en un coup
+    # d'œil. Mode --detailed : changelog complet scrapé depuis les notes officielles.
+    detailed = "--detailed" in sys.argv or os.environ.get("DETAILED") == "1"
 
-    # Repli : diff des données DDragon.
-    if not blocks:
+    if detailed:
+        try:
+            blocks = scraper.parse(scraper.fetch(url))
+            print(f"Scraping OK : {len(blocks)} blocs.")
+        except Exception as e:  # noqa: BLE001
+            print(f"Scraping échoué ({e}). Repli sur le résumé DDragon.")
+            detailed = False
+
+    if not detailed:
         prev = known if (known and known != latest) else (
             versions[1] if len(versions) > 1 else latest)
         blocks = diff.build_blocks(
             ddragon.champions_full(prev), ddragon.champions_full(latest),
             ddragon.items(prev), ddragon.items(latest),
         )
-        source = "fallback"
 
-    n = notify.send_blocks(patch, date_str, url, blocks, source)
-    print(f"{n} message(s) envoyé(s) [{source}].")
+    # Résumé -> colonnes compactes (inline) ; détaillé -> pleine largeur.
+    n = notify.send_blocks(patch, date_str, url, blocks, "ok", inline=not detailed)
+    print(f"{n} message(s) envoyé(s) [{'détaillé' if detailed else 'résumé'}].")
     save_state(latest)
 
 
