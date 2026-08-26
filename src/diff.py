@@ -33,14 +33,22 @@ def _fmt(v) -> str:
     return f"{v:.4g}" if isinstance(v, float) else str(v)
 
 
-def _burn_sum(s):
-    total, seen = 0.0, False
+def _burn_mean(s):
+    """Moyenne des rangs d'une chaîne "burn" ("35/40/45" -> 40), ou None.
+
+    On compare des moyennes et non des sommes : un sort peut passer d'un coût
+    plat ("30") à un coût par rang ("46/42/38/34/30"). Sommer donnerait 30 vs
+    190 et conclurait au nerf pour une raison fausse ; pire, "60/55/50/45/40"
+    -> "50" serait annoncé buff. La moyenne reste comparable quel que soit le
+    nombre de rangs, et coïncide avec la somme quand il ne change pas.
+    """
+    vals = []
     for part in str(s).split("/"):
         try:
-            total += float(part.strip()); seen = True
+            vals.append(float(part.strip()))
         except ValueError:
             pass
-    return total if seen else None
+    return sum(vals) / len(vals) if vals else None
 
 
 def _real_champs(data: dict) -> dict:
@@ -63,7 +71,7 @@ def _champ_lines(o: dict, n: dict) -> list[tuple]:
         for field, (label, up_is_buff) in SPELL_FIELDS.items():
             ov, nv = o_spells[i].get(field), n_spells[i].get(field)
             if ov is not None and nv is not None and ov != nv:
-                os_, ns_ = _burn_sum(ov), _burn_sum(nv)
+                os_, ns_ = _burn_mean(ov), _burn_mean(nv)
                 text = f"{slot} {label} {ov}→{nv}"
                 if os_ is None or ns_ is None or os_ == ns_:
                     lines.append(("neutral", None, text))
@@ -73,13 +81,27 @@ def _champ_lines(o: dict, n: dict) -> list[tuple]:
     return lines
 
 
+def _added_removed(old: dict, new: dict) -> tuple[list[str], list[str]]:
+    """Noms ajoutés / retirés, en ignorant les simples renumérotations d'ID.
+
+    Riot réattribue parfois l'ID d'une entrée sans rien changer d'autre (patch
+    26.17 : « Lame tempête » passe de l'id 3097 à 3095). Comparer les clés seules
+    annonce alors le même nom en nouveauté ET en suppression. On écarte donc les
+    noms qui apparaissent des deux côtés : ce n'est pas un changement de jeu.
+    """
+    ok, nk = set(old), set(new)
+    added = {new[k]["name"] for k in nk - ok}
+    removed = {old[k]["name"] for k in ok - nk}
+    both = added & removed
+    return sorted(added - both), sorted(removed - both)
+
+
 def build_blocks(old_champ: dict, new_champ: dict, old_items: dict, new_items: dict) -> list[dict]:
     blocks: list[dict] = []
     oc, nc = _real_champs(old_champ), _real_champs(new_champ)
     ock, nck = set(oc), set(nc)
 
-    added = sorted(nc[k]["name"] for k in nck - ock)
-    removed = sorted(oc[k]["name"] for k in ock - nck)
+    added, removed = _added_removed(oc, nc)
     if added:
         blocks.append({"name": "🆕 Nouveaux champions", "lines": [("text", None, ", ".join(added))]})
     if removed:
@@ -101,8 +123,7 @@ def build_blocks(old_champ: dict, new_champ: dict, old_items: dict, new_items: d
 
     oi, ni = buyable(old_items), buyable(new_items)
     oik, nik = set(oi), set(ni)
-    it_added = sorted(ni[k]["name"] for k in nik - oik)
-    it_removed = sorted(oi[k]["name"] for k in oik - nik)
+    it_added, it_removed = _added_removed(oi, ni)
     if it_added:
         blocks.append({"name": "🆕 Nouveaux items", "lines": [("text", None, ", ".join(it_added))]})
     if it_removed:
