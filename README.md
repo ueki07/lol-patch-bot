@@ -6,7 +6,7 @@ nouveau patch de League of Legends sort.
 - **Détection** : API officielle Data Dragon de Riot (`versions.json`), gratuite, sans clé.
 - **Contenu (défaut)** : résumé **concis et lisible** via les données DDragon —
   l'essentiel en un coup d'œil : stats de base, CD/coût/portée des sorts,
-  nouveaux/retirés champions & items, prix. Buff 🟢 / nerf 🔴 / ajustement ⚪.
+  nouveaux/retirés champions & items, prix. Buff ▲ vert / nerf ▼ rouge / ajustement ⚪.
 - **Mode `--detailed`** (ou `DETAILED=1`) : changelog **complet** scrapé depuis les
   notes officielles FR (tous les sorts, items, runes, ARAM…), paginé en plusieurs messages.
 - **Envoi** : webhook Discord (aucun serveur à héberger).
